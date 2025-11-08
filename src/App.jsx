@@ -33,21 +33,50 @@ function App() {
 
       if (selected) {
         const files = Array.isArray(selected) ? selected : [selected];
+        
+        // 파일 개수 제한 (DoS 방지)
+        const MAX_FILES = 100;
+        if (files.length > MAX_FILES) {
+          setError(`You can select up to ${MAX_FILES} files at once.`);
+          return;
+        }
+        
         const fileList = await Promise.all(
           files.map(async (file) => {
             const path = typeof file === "string" ? file : file.path || file;
+            
+            // 경로 검증 (XSS 방지)
+            if (!path || typeof path !== "string") {
+              throw new Error("Invalid file path.");
+            }
+            
             const fileName = typeof file === "string" 
               ? await basename(file)
               : file.name || (await basename(file));
+            
+            // 파일명 검증
+            if (!fileName || fileName.length > 255) {
+              throw new Error("Invalid filename.");
+            }
+            
             return { path, fileName };
           })
         );
         
-        setInputFiles((prev) => [...prev, ...fileList]);
+        setInputFiles((prev) => {
+          const total = prev.length + fileList.length;
+          if (total > MAX_FILES) {
+            setError(`Total number of files exceeds ${MAX_FILES}.`);
+            return prev;
+          }
+          return [...prev, ...fileList];
+        });
         setError("");
       }
     } catch (err) {
-      setError(`파일 선택 오류: ${err}`);
+      // 에러 메시지에서 민감한 정보 제거
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setError(`File selection error: ${errorMessage.replace(/[^\w\s.,!?]/g, "")}`);
     }
   }
 
@@ -94,7 +123,7 @@ function App() {
       });
       setPreviewImage(previewDataUrl);
     } catch (err) {
-      console.error("미리보기 로드 오류:", err);
+      console.error("Preview load error:", err);
       // 미리보기 로드 실패해도 변환은 가능하도록 에러는 표시하지 않음
     } finally {
       setIsLoadingPreview(false);
@@ -103,7 +132,7 @@ function App() {
 
   async function convertAllFiles() {
     if (inputFiles.length === 0) {
-      setError("먼저 HEIC 파일을 선택해주세요.");
+      setError("Please select HEIC files first.");
       return;
     }
 
@@ -135,7 +164,7 @@ function App() {
         setConvertedCount(successCount);
       } catch (err) {
         failCount++;
-        console.error(`파일 변환 실패: ${file.fileName}`, err);
+        console.error(`File conversion failed: ${file.fileName}`, err);
       }
     }
 
@@ -152,10 +181,10 @@ function App() {
       setShowPreviewModal(false);
       
       if (failCount > 0) {
-        setError(`${successCount}개 성공, ${failCount}개 실패`);
+        setError(`${successCount} succeeded, ${failCount} failed`);
       }
     } else {
-      setError("모든 파일 변환에 실패했습니다.");
+      setError("All file conversions failed.");
     }
   }
 
@@ -181,22 +210,22 @@ function App() {
             className="select-button"
           >
             {inputFiles.length > 0 
-              ? `${inputFiles.length}개 파일 선택됨` 
-              : "HEIC 파일 선택"}
+              ? `${inputFiles.length} file(s) selected` 
+              : "Select HEIC Files"}
           </button>
         </div>
 
         {inputFiles.length > 0 && (
           <div className="file-list">
             <div className="file-list-header">
-              <span>선택된 파일 ({inputFiles.length}개)</span>
+              <span>Selected Files ({inputFiles.length})</span>
               <button
                 type="button"
                 onClick={clearAllFiles}
                 disabled={isConverting}
                 className="clear-all-button"
               >
-                모두 지우기
+                Clear All
               </button>
             </div>
             <div className="file-list-items">
@@ -207,7 +236,7 @@ function App() {
                 >
                   <span className="file-name">{file.fileName}</span>
                   {convertingIndex === index && (
-                    <span className="converting-badge">변환 중...</span>
+                    <span className="converting-badge">Converting...</span>
                   )}
                   {convertingIndex === index && convertedCount > 0 && (
                     <span className="progress-text">
@@ -220,16 +249,16 @@ function App() {
                       onClick={() => showPreview(index)}
                       disabled={isConverting}
                       className="preview-file-button"
-                      title="미리보기"
+                      title="Preview"
                     >
-                      미리보기
+                      Preview
                     </button>
                     <button
                       type="button"
                       onClick={() => removeFile(index)}
                       disabled={isConverting}
                       className="remove-file-button"
-                      title="삭제"
+                      title="Remove"
                     >
                       ×
                     </button>
@@ -247,7 +276,13 @@ function App() {
               type="radio"
               value="jpg"
               checked={outputFormat === "jpg"}
-              onChange={(e) => setOutputFormat(e.target.value)}
+              onChange={(e) => {
+                // 입력 검증 (XSS 방지)
+                const value = e.target.value;
+                if (value === "jpg" || value === "png") {
+                  setOutputFormat(value);
+                }
+              }}
               disabled={isConverting}
             />
             JPG
@@ -257,7 +292,13 @@ function App() {
               type="radio"
               value="png"
               checked={outputFormat === "png"}
-              onChange={(e) => setOutputFormat(e.target.value)}
+              onChange={(e) => {
+                // 입력 검증 (XSS 방지)
+                const value = e.target.value;
+                if (value === "jpg" || value === "png") {
+                  setOutputFormat(value);
+                }
+              }}
               disabled={isConverting}
             />
             PNG
@@ -271,10 +312,10 @@ function App() {
           className="convert-button"
         >
           {isConverting 
-            ? `변환 중... (${convertedCount}/${inputFiles.length})` 
+            ? `Converting... (${convertedCount}/${inputFiles.length})` 
             : inputFiles.length > 0 
-              ? `${inputFiles.length}개 모두 변환하기`
-              : "변환하기"}
+              ? `Convert All (${inputFiles.length})`
+              : "Convert"}
         </button>
 
         {error && <div className="message error">{error}</div>}
@@ -288,13 +329,13 @@ function App() {
               <span className="preview-modal-title">
                 {previewFileIndex >= 0 && inputFiles[previewFileIndex] 
                   ? inputFiles[previewFileIndex].fileName 
-                  : "미리보기"}
+                  : "Preview"}
               </span>
               <button
                 type="button"
                 onClick={closePreviewModal}
                 className="preview-modal-close"
-                title="닫기"
+                title="Close"
               >
                 ×
               </button>
@@ -303,12 +344,12 @@ function App() {
               {isLoadingPreview && (
                 <div className="preview-loading">
                   <div className="spinner"></div>
-                  <span>미리보기 로딩 중...</span>
+                  <span>Loading preview...</span>
                 </div>
               )}
               {previewImage && !isLoadingPreview && (
                 <div className="preview-container">
-                  <img src={previewImage} alt="미리보기" className="preview-image" />
+                  <img src={previewImage} alt="Preview" className="preview-image" />
                 </div>
               )}
             </div>
@@ -321,11 +362,11 @@ function App() {
         <div className="toast success">
           <div className="toast-icon">✓</div>
           <div className="toast-content">
-            <div className="toast-title">변환 완료!</div>
+            <div className="toast-title">Conversion Complete!</div>
             <div className="toast-message">
               {lastConvertedCount > 0 
-                ? `${lastConvertedCount}개 이미지가 성공적으로 변환되어 저장되었습니다.`
-                : "이미지가 성공적으로 변환되어 저장되었습니다."}
+                ? `${lastConvertedCount} image(s) have been successfully converted and saved.`
+                : "Image has been successfully converted and saved."}
             </div>
           </div>
         </div>

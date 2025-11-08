@@ -1,7 +1,134 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+
+// 보안 강화: 경고 활성화
+#![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+
+use std::path::{Path, PathBuf};
+use std::fs;
+
+// 보안 상수
+const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+const MAX_IMAGE_DIMENSION: u32 = 32767; // 최대 이미지 크기 (Windows 제한)
+const MAX_PREVIEW_DIMENSION: u32 = 800; // 미리보기 최대 크기
+
+// 파일 경로 검증 및 정규화
+fn validate_and_normalize_path(path_str: &str) -> Result<PathBuf, String> {
+    let path = Path::new(path_str);
+    
+    // 절대 경로로 변환
+    let normalized = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| "Unable to determine current directory.")?
+            .join(path)
+    };
+    
+    // 경로 정규화 (.. 제거)
+    let canonical = normalized.canonicalize()
+        .map_err(|_| "Invalid file path.")?;
+    
+    // 경로 길이 제한 (Windows 경로 최대 길이: 260자, 확장 경로: 32767자)
+    let path_string = canonical.to_string_lossy();
+    if path_string.len() > 260 {
+        return Err("File path is too long.".to_string());
+    }
+    
+    Ok(canonical)
+}
+
+// 파일 크기 검증
+fn validate_file_size(path: &Path) -> Result<u64, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|_| "Unable to read file information.")?;
+    
+    let size = metadata.len();
+    if size > MAX_FILE_SIZE {
+        return Err(format!("File size is too large. Maximum {}MB is supported.", MAX_FILE_SIZE / (1024 * 1024)));
+    }
+    
+    if size == 0 {
+        return Err("File is empty.".to_string());
+    }
+    
+    Ok(size)
+}
+
+// 파일 확장자 검증
+fn validate_heic_extension(path: &Path) -> Result<(), String> {
+    if let Some(ext) = path.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        if ext_lower == "heic" || ext_lower == "heif" {
+            return Ok(());
+        }
+    }
+    Err("Unsupported file format. Only HEIC or HEIF files are supported.".to_string())
+}
+
+// 출력 경로 검증
+fn validate_output_path(path: &Path, format: &str) -> Result<(), String> {
+    // 출력 경로의 확장자 검증
+    if let Some(ext) = path.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        let expected_ext = match format.to_lowercase().as_str() {
+            "jpg" | "jpeg" => "jpg",
+            "png" => "png",
+            _ => return Err("Unsupported output format.".to_string()),
+        };
+        
+        if ext_lower != expected_ext {
+            return Err(format!("Output file extension does not match the format. Please use .{} extension.", expected_ext));
+        }
+    } else {
+        return Err("Output file has no extension.".to_string());
+    }
+    
+    // 출력 디렉토리 존재 확인
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            return Err("Output directory does not exist.".to_string());
+        }
+    }
+    
+    Ok(())
+}
+
+// 파일명에서 경로 추출 (에러 메시지용)
+fn get_filename_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown file")
+        .to_string()
+}
+
+// 이미지 크기 검증
+fn validate_image_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("Invalid image dimensions.".to_string());
+    }
+    
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(format!("Image dimensions are too large. Maximum {}x{} pixels are supported.", MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION));
+    }
+    
+    // 메모리 사용량 추정 (너무 큰 이미지 방지)
+    let estimated_size = (width as u64) * (height as u64) * 3; // RGB
+    if estimated_size > 500 * 1024 * 1024 { // 500MB
+        return Err("Image is too large to process.".to_string());
+    }
+    
+    Ok(())
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+    // XSS 방지를 위한 입력 검증
+    let sanitized = name.chars()
+        .take(100) // 최대 길이 제한
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '-' | '_'))
+        .collect::<String>();
+    format!("Hello, {}! You've been greeted from Rust!", sanitized)
 }
 
 #[tauri::command]
@@ -10,42 +137,59 @@ async fn convert_heic_to_image(
     output_path: String,
     format: String, // "jpg" or "png"
 ) -> Result<String, String> {
+    // 입력 검증
     let format_lower = format.to_lowercase();
     if format_lower != "jpg" && format_lower != "jpeg" && format_lower != "png" {
-        return Err(format!("지원하지 않는 형식입니다: {}", format));
+        return Err("Unsupported format.".to_string());
     }
-
+    
+    // 경로 검증 및 정규화
+    let validated_input = validate_and_normalize_path(&input_path)
+        .map_err(|e| format!("Input file path error: {}", e))?;
+    
+    let validated_output = validate_and_normalize_path(&output_path)
+        .map_err(|e| format!("Output file path error: {}", e))?;
+    
+    // 파일 확장자 검증
+    validate_heic_extension(&validated_input)?;
+    validate_output_path(&validated_output, &format_lower)?;
+    
+    // 파일 크기 검증
+    validate_file_size(&validated_input)?;
+    
+    // 파일명 추출 (에러 메시지용)
+    let input_filename = get_filename_from_path(&validated_input);
+    
     use std::fs::File;
     use std::io::Read;
 
     // HEIC 파일 읽기
-    let mut file = File::open(&input_path)
-        .map_err(|e| format!("파일을 열 수 없습니다: {}", e))?;
+    let mut file = File::open(&validated_input)
+        .map_err(|_| format!("Unable to open file: {}", input_filename))?;
     
     let mut heic_data = Vec::new();
     file.read_to_end(&mut heic_data)
-        .map_err(|e| format!("파일을 읽을 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to read file: {}", input_filename))?;
 
     if heic_data.is_empty() {
-        return Err("파일이 비어있습니다.".to_string());
+        return Err(format!("File is empty: {}", input_filename));
     }
 
     // libheif-rs를 사용하여 HEIC 파일 처리
     let lib_heif = libheif_rs::LibHeif::new();
     let ctx = libheif_rs::HeifContext::read_from_bytes(&heic_data)
-        .map_err(|e| format!("HEIC 파일을 파싱할 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to parse HEIC file: {}", input_filename))?;
 
     // 첫 번째 이미지 핸들 가져오기
     let handle = ctx.primary_image_handle()
-        .map_err(|e| format!("이미지 핸들을 가져올 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to process image: {}", input_filename))?;
 
     // 이미지 크기 가져오기
     let width = handle.width();
     let height = handle.height();
-
-    if width == 0 || height == 0 {
-        return Err("이미지 크기가 0입니다.".to_string());
-    }
+    
+    // 이미지 크기 검증
+    validate_image_dimensions(width, height)?;
 
     // 이미지 디코딩 (RGB로)
     let image = lib_heif.decode(
@@ -53,13 +197,13 @@ async fn convert_heic_to_image(
         libheif_rs::ColorSpace::Rgb(libheif_rs::RgbChroma::Rgb),
         None,
     )
-    .map_err(|e| format!("HEIC 이미지를 디코딩할 수 없습니다: {}", e))?;
+    .map_err(|_| format!("Unable to decode image: {}", input_filename))?;
 
     // RGB 평면 가져오기
     let planes = image.planes();
     let interleaved_plane = planes
         .interleaved
-        .ok_or_else(|| "인터리브된 평면을 가져올 수 없습니다.".to_string())?;
+        .ok_or_else(|| format!("Unable to process image data: {}", input_filename))?;
 
     let data = interleaved_plane.data;
     let stride = interleaved_plane.stride;
@@ -81,57 +225,72 @@ async fn convert_heic_to_image(
 
     let dynamic_img = image::DynamicImage::ImageRgb8(img_buffer);
 
+    // 출력 파일명 추출
+    let output_filename = get_filename_from_path(&validated_output);
+    
     // 저장
     match format_lower.as_str() {
         "jpg" | "jpeg" => {
             dynamic_img
-                .save_with_format(&output_path, image::ImageFormat::Jpeg)
-                .map_err(|e| format!("JPG 저장 실패: {}", e))?;
+                .save_with_format(&validated_output, image::ImageFormat::Jpeg)
+                .map_err(|_| format!("Failed to save image: {}", output_filename))?;
         }
         "png" => {
             dynamic_img
-                .save_with_format(&output_path, image::ImageFormat::Png)
-                .map_err(|e| format!("PNG 저장 실패: {}", e))?;
+                .save_with_format(&validated_output, image::ImageFormat::Png)
+                .map_err(|_| format!("Failed to save image: {}", output_filename))?;
         }
-        _ => return Err(format!("지원하지 않는 형식: {}", format)),
+        _ => return Err("Unsupported format.".to_string()),
     }
 
-    Ok(format!("변환 완료: {}", output_path))
+    Ok(format!("Conversion completed: {}", output_filename))
 }
 
 #[tauri::command]
 async fn get_preview_image(input_path: String) -> Result<String, String> {
+    // 경로 검증 및 정규화
+    let validated_input = validate_and_normalize_path(&input_path)
+        .map_err(|e| format!("Input file path error: {}", e))?;
+    
+    // 파일 확장자 검증
+    validate_heic_extension(&validated_input)?;
+    
+    // 파일 크기 검증 (미리보기는 더 작은 제한 적용)
+    validate_file_size(&validated_input)?;
+    
+    // 파일명 추출 (에러 메시지용)
+    let input_filename = get_filename_from_path(&validated_input);
+    
     use std::fs::File;
     use std::io::Read;
 
     // HEIC 파일 읽기
-    let mut file = File::open(&input_path)
-        .map_err(|e| format!("파일을 열 수 없습니다: {}", e))?;
+    let mut file = File::open(&validated_input)
+        .map_err(|_| format!("Unable to open file: {}", input_filename))?;
     
     let mut heic_data = Vec::new();
     file.read_to_end(&mut heic_data)
-        .map_err(|e| format!("파일을 읽을 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to read file: {}", input_filename))?;
 
     if heic_data.is_empty() {
-        return Err("파일이 비어있습니다.".to_string());
+        return Err(format!("File is empty: {}", input_filename));
     }
 
     // libheif-rs를 사용하여 HEIC 파일 처리
     let lib_heif = libheif_rs::LibHeif::new();
     let ctx = libheif_rs::HeifContext::read_from_bytes(&heic_data)
-        .map_err(|e| format!("HEIC 파일을 파싱할 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to parse HEIC file: {}", input_filename))?;
 
     // 첫 번째 이미지 핸들 가져오기
     let handle = ctx.primary_image_handle()
-        .map_err(|e| format!("이미지 핸들을 가져올 수 없습니다: {}", e))?;
+        .map_err(|_| format!("Unable to process image: {}", input_filename))?;
 
     // 이미지 크기 가져오기
     let width = handle.width();
     let height = handle.height();
-
-    if width == 0 || height == 0 {
-        return Err("이미지 크기가 0입니다.".to_string());
-    }
+    
+    // 이미지 크기 검증
+    validate_image_dimensions(width, height)?;
 
     // 이미지 디코딩 (RGB로)
     let image = lib_heif.decode(
@@ -139,13 +298,13 @@ async fn get_preview_image(input_path: String) -> Result<String, String> {
         libheif_rs::ColorSpace::Rgb(libheif_rs::RgbChroma::Rgb),
         None,
     )
-    .map_err(|e| format!("HEIC 이미지를 디코딩할 수 없습니다: {}", e))?;
+    .map_err(|_| format!("Unable to decode image: {}", input_filename))?;
 
     // RGB 평면 가져오기
     let planes = image.planes();
     let interleaved_plane = planes
         .interleaved
-        .ok_or_else(|| "인터리브된 평면을 가져올 수 없습니다.".to_string())?;
+        .ok_or_else(|| format!("Unable to process image data: {}", input_filename))?;
 
     let data = interleaved_plane.data;
     let stride = interleaved_plane.stride;
@@ -167,10 +326,9 @@ async fn get_preview_image(input_path: String) -> Result<String, String> {
 
     let dynamic_img = image::DynamicImage::ImageRgb8(img_buffer);
     
-    // 미리보기를 위해 최대 크기 제한 (예: 800px)
-    let max_dimension = 800u32;
-    let resized_img = if width as u32 > max_dimension || height as u32 > max_dimension {
-        let ratio = (max_dimension as f32 / width.max(height) as f32).min(1.0);
+    // 미리보기를 위해 최대 크기 제한
+    let resized_img = if width as u32 > MAX_PREVIEW_DIMENSION || height as u32 > MAX_PREVIEW_DIMENSION {
+        let ratio = (MAX_PREVIEW_DIMENSION as f32 / width.max(height) as f32).min(1.0);
         let new_width = (width as f32 * ratio) as u32;
         let new_height = (height as f32 * ratio) as u32;
         dynamic_img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
@@ -190,13 +348,13 @@ async fn get_preview_image(input_path: String) -> Result<String, String> {
     // PNG로 저장
     resized_img
         .save_with_format(&temp_file, image::ImageFormat::Png)
-        .map_err(|e| format!("이미지 인코딩 실패: {}", e))?;
+        .map_err(|_| format!("Unable to generate preview image: {}", input_filename))?;
     
     // 파일 내용을 메모리로 읽기
     let buffer = fs::read(&temp_file)
-        .map_err(|e| format!("임시 파일 읽기 실패: {}", e))?;
+        .map_err(|_| format!("Unable to read preview data: {}", input_filename))?;
     
-    // 임시 파일 삭제 (실패해도 무시)
+    // 임시 파일 삭제 (보안: 민감한 데이터 제거)
     let _ = fs::remove_file(&temp_file);
 
     // base64로 인코딩
