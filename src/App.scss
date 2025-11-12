@@ -571,6 +571,12 @@ body {
   padding: 1rem;
   border-radius: $border-radius;
   font-size: 1em;
+  white-space: pre-wrap; // 줄바꿈 유지
+  word-wrap: break-word; // 긴 단어 줄바꿈
+  max-height: 300px; // 최대 높이 제한
+  overflow-y: auto; // 스크롤 가능
+  text-align: left; // 왼쪽 정렬
+  line-height: 1.5; // 줄 간격
 
   &.success {
     background-color: $success-green;

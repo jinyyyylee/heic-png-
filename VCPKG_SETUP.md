@@ -5,7 +5,9 @@ Windows에서 HEIC 변환기 앱을 빌드하려면 Vcpkg가 필요합니다.
 ## Vcpkg 설치 방법
 
 ### 1. Git 설치 확인
+
 Vcpkg는 Git을 통해 설치됩니다. Git이 설치되어 있지 않다면 먼저 설치하세요:
+
 - [Git 다운로드](https://git-scm.com/download/win)
 
 ### 2. Vcpkg 설치
@@ -30,6 +32,7 @@ cd vcpkg
 ```
 
 #### 방법 2: 수동 설치
+
 1. [Vcpkg GitHub](https://github.com/Microsoft/vcpkg)에서 다운로드
 2. 압축 해제
 3. 해당 폴더에서 PowerShell 실행
@@ -40,11 +43,13 @@ cd vcpkg
 #### VCPKG_ROOT 환경 변수 설정
 
 **PowerShell에서 (현재 세션만):**
+
 ```powershell
 $env:VCPKG_ROOT = "C:\dev\vcpkg"
 ```
 
 **영구적으로 설정 (시스템 환경 변수):**
+
 1. Windows 검색에서 "환경 변수" 검색
 2. "시스템 환경 변수 편집" 선택
 3. "환경 변수" 버튼 클릭
@@ -54,6 +59,7 @@ $env:VCPKG_ROOT = "C:\dev\vcpkg"
 7. 확인 클릭
 
 **또는 PowerShell에서 영구 설정:**
+
 ```powershell
 [System.Environment]::SetEnvironmentVariable("VCPKG_ROOT", "C:\dev\vcpkg", "Machine")
 ```
@@ -87,15 +93,18 @@ yarn tauri:build
 ## 문제 해결
 
 ### Vcpkg를 찾을 수 없다는 오류
+
 - 환경 변수 `VCPKG_ROOT`가 제대로 설정되었는지 확인
 - **새 PowerShell/터미널 창**을 열어야 환경 변수가 적용됩니다
 - PowerShell에서 확인: `echo $env:VCPKG_ROOT`
 
 ### Visual C++ 빌드 도구 오류
+
 - Visual Studio Build Tools 또는 Visual Studio Community가 설치되어 있어야 합니다
 - 설치 시 "C++를 사용한 데스크톱 개발" 워크로드 선택 필요
 
 ### 빌드 시간이 너무 오래 걸림
+
 - libheif와 의존성(libx265, libde265 등)을 처음 빌드하는 경우 시간이 오래 걸립니다
 - 이후 빌드는 훨씬 빠릅니다
 
@@ -113,4 +122,3 @@ docker run -v ${PWD}:/app -w /app tauri-builder yarn tauri:build
 - Vcpkg는 대용량 도구입니다 (수 GB)
 - libheif 빌드에 상당한 시간이 소요될 수 있습니다
 - 빌드된 라이브러리는 `vcpkg\installed` 폴더에 저장됩니다
-

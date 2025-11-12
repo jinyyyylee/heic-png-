@@ -141,6 +141,7 @@ function App() {
     setConvertedCount(0);
     let successCount = 0;
     let failCount = 0;
+    const failedFiles = []; // 실패한 파일들의 정보를 저장
 
     for (let i = 0; i < inputFiles.length; i++) {
       setConvertingIndex(i);
@@ -154,6 +155,13 @@ function App() {
         const extension = outputFormat === "jpg" ? "jpg" : "png";
         const outputPath = await join(inputDir, `${nameWithoutExt}.${extension}`);
 
+        // 디버깅을 위한 로그
+        console.log(`[Conversion] Input: ${inputPath}`);
+        console.log(`[Conversion] Output: ${outputPath}`);
+        console.log(`[Conversion] Input Dir: ${inputDir}`);
+        console.log(`[Conversion] Base Name: ${inputBaseName}`);
+        console.log(`[Conversion] Name without ext: ${nameWithoutExt}`);
+
         await invoke("convert_heic_to_image", {
           inputPath: inputPath,
           outputPath: outputPath,
@@ -164,7 +172,15 @@ function App() {
         setConvertedCount(successCount);
       } catch (err) {
         failCount++;
-        console.error(`File conversion failed: ${file.fileName}`, err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error(`[Conversion Failed] File: ${file.fileName}`, errorMessage);
+        console.error(`[Conversion Failed] Full error:`, err);
+        
+        // 실패한 파일 정보 저장
+        failedFiles.push({
+          fileName: file.fileName,
+          error: errorMessage,
+        });
       }
     }
 
@@ -181,10 +197,41 @@ function App() {
       setShowPreviewModal(false);
       
       if (failCount > 0) {
-        setError(`${successCount} succeeded, ${failCount} failed`);
+        // 일부 성공, 일부 실패
+        const errorSummary = failedFiles.length > 0 
+          ? `\n\nFailed files:\n${failedFiles.slice(0, 3).map(f => `- ${f.fileName}: ${f.error}`).join('\n')}${failedFiles.length > 3 ? `\n... and ${failedFiles.length - 3} more.` : ''}`
+          : '';
+        setError(`${successCount} file(s) succeeded, ${failCount} file(s) failed.${errorSummary}\n\nCheck the browser console (F12) for detailed error messages.`);
       }
     } else {
-      setError("All file conversions failed.");
+      // 모든 파일이 실패한 경우
+      if (failedFiles.length > 0) {
+        // 첫 번째 실패한 파일의 상세 에러 메시지 표시
+        const firstFailure = failedFiles[0];
+        let errorMsg = `❌ All file conversions failed\n\n`;
+        errorMsg += `📄 First error (${firstFailure.fileName}):\n${firstFailure.error}\n\n`;
+        
+        if (failedFiles.length > 1) {
+          errorMsg += `⚠️ Additional failures: ${failedFiles.length - 1} more file(s)\n\n`;
+        }
+        
+        errorMsg += `💡 Please check the browser console (F12) for all error details.`;
+        
+        // 일반적인 해결 방법 제시
+        if (firstFailure.error.includes("DLL") || firstFailure.error.includes("libheif") || firstFailure.error.includes("Unable to parse HEIC")) {
+          errorMsg += `\n\n🔧 Possible solution: In debug mode, ensure DLL files are available. See FIX_DEBUG_BUILD.md for details.`;
+        } else if (firstFailure.error.includes("Permission") || firstFailure.error.includes("in use") || firstFailure.error.includes("cannot be overwritten")) {
+          errorMsg += `\n\n🔧 Possible solution: Close the file if it's open in another program, or check file permissions.`;
+        } else if (firstFailure.error.includes("disk") || firstFailure.error.includes("space") || firstFailure.error.includes("full")) {
+          errorMsg += `\n\n🔧 Possible solution: Free up disk space.`;
+        } else if (firstFailure.error.includes("Unable to open file") || firstFailure.error.includes("Unable to read file")) {
+          errorMsg += `\n\n🔧 Possible solution: Check if the file exists and is accessible.`;
+        }
+        
+        setError(errorMsg);
+      } else {
+        setError("All file conversions failed. Please check the browser console (F12) for error details.");
+      }
     }
   }
 
